@@ -1,0 +1,19 @@
+[package]
+name = "Scale"
+version = "0.1.0"
+edition = "2021"
+authors = ["Chord"]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+object = "0"
+#anyhow = "1"
+thiserror = "1"
+regex = "1"
+tracing = "0"
+tracing-subscriber = {version = "0",features = ["local-time"]}
+clap  = {version = "4", features = ["derive"]}
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = 3

@@ -12,6 +12,8 @@ regex = "1"
 tracing = "0"
 tracing-subscriber = {version = "0",features = ["local-time"]}
 clap  = {version = "4", features = ["derive"]}
+rand = "0.8.5"
+log = "0.4.20"
 
 [profile.release]
 panic = "abort"

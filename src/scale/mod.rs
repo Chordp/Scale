@@ -1,6 +1,6 @@
 mod error;
 pub use error::{Error, Result};
-use object::coff::{CoffFile, CoffHeader, ImageSymbol};
+use object::coff::{CoffHeader, ImageSymbol};
 use object::pe::ImageFileHeader;
 use object::LittleEndian as LE;
 use object::{pe, read::*};
@@ -250,7 +250,7 @@ impl Shellcode {
                             let rel = relocation.typ - 4;
                             match relocation.typ {
                                 pe::IMAGE_REL_AMD64_ADDR64=>{
-                                    let mut slice = &mut self.code[offset ..offset + 8];
+                                    let slice = &mut self.code[offset ..offset + 8];
                                     let value = {
                                         let value = i64::from_le_bytes(slice.try_into()?);
                                         if value != -1 || value != 0 {
@@ -259,13 +259,13 @@ impl Shellcode {
                                             0
                                         }
                                     };
-                                    let rel = (symbol_offset as i64 + value);
+                                    let rel = symbol_offset as i64 + value;
                                     slice.copy_from_slice(&rel.to_le_bytes()[..8]);
                                     self.rel64.push(offset as u32);
                                 }
                                 _ => {
                                     if (0..=5).contains(&rel) {
-                                        let mut slice = &mut self.code[offset..offset + 4];
+                                        let slice = &mut self.code[offset..offset + 4];
                                         let value = {
                                             let value = i32::from_le_bytes(slice.try_into()?);
                                             if value != -1 || value != 0 {
@@ -284,7 +284,7 @@ impl Shellcode {
 
                             match relocation.typ {
                                 pe::IMAGE_REL_I386_REL32=>{
-                                    let mut slice = &mut self.code[offset..offset + 4];
+                                    let slice = &mut self.code[offset..offset + 4];
                                     let value = {
                                         let value = i32::from_le_bytes(slice.try_into()?);
                                         if value != -1 || value != 0 {

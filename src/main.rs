@@ -1,8 +1,5 @@
 use crate::scale::Shellcode;
 use clap::Parser;
-use std::fs;
-use std::io::Write;
-use std::path::Path;
 use tracing_subscriber::fmt::time::LocalTime;
 use args::Args;
 mod scale;

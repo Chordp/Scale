@@ -1,9 +1,4 @@
-use std::fs;
-use std::io::Write;
-use std::path::Path;
 use clap::Parser;
-use crate::scale;
-use crate::scale::Shellcode;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

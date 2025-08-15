@@ -1,14 +1,14 @@
 mod error;
+use crate::args::Args;
 pub use error::{Error, Result};
 use object::coff::{CoffHeader, ImageSymbol};
 use object::pe::ImageFileHeader;
 use object::LittleEndian as LE;
 use object::{pe, read::*};
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use crate::args::Args;
 #[derive(Debug, Clone)]
 pub struct Relocation {
     pub offset: u32,
@@ -40,7 +40,7 @@ impl Default for Symbol {
 pub struct Shellcode {
     exports: Vec<String>,
     symbols: HashMap<String, Symbol>,
-    shell_map: HashMap<String, (usize,usize)>,
+    shell_map: HashMap<String, (usize, usize)>,
     rel64: Vec<u32>,
     code: Vec<u8>,
     machine: Option<u16>,
@@ -61,15 +61,12 @@ impl SymbolExt for pe::ImageSymbol {
 }
 impl Shellcode {
     pub fn form_binary(&mut self, binary: &[u8]) -> Result<()> {
-
         match FileKind::parse(binary)? {
             FileKind::Archive => {
                 let archive = archive::ArchiveFile::parse(binary)?;
                 for member in archive.members().flatten() {
-
                     let data = member.data(binary)?;
                     self.form_binary(data)?;
-
                 }
             }
             FileKind::Coff => {
@@ -109,25 +106,28 @@ impl Shellcode {
                     .collect::<Vec<_>>();
                 self.exports.extend(exports);
 
-                let file_name = symbols.iter().find_map(|(index, symbol)| {
-                    if symbol.has_aux_file_name()  {
-                        let name = symbols.aux_file_name(index, symbol.number_of_aux_symbols());
-                        if let Ok(name) = name {
-                            return Some(String::from_utf8_lossy(name).to_string());
+                let file_name = symbols
+                    .iter()
+                    .find_map(|(index, symbol)| {
+                        if symbol.has_aux_file_name() {
+                            let name = symbols.aux_file_name(index, symbol.number_of_aux_symbols());
+                            if let Ok(name) = name {
+                                return Some(String::from_utf8_lossy(name).to_string());
+                            }
                         }
-                    }
-                    None
-                }).unwrap_or(rand::random::<u16>().to_string());
+                        None
+                    })
+                    .unwrap_or(rand::random::<u16>().to_string());
                 let symbols: HashMap<_, _> = symbols
                     .iter()
                     .filter_map(|(_, symbol)| {
                         let section_number = symbol.section_number();
                         let mut name = symbol.name_str(symbols.strings());
-                        if section_number != 0 &&
-                            (symbol.storage_class() == pe::IMAGE_SYM_CLASS_EXTERNAL ||
-                                name == ".data")
+                        if section_number != 0
+                            && (symbol.storage_class() == pe::IMAGE_SYM_CLASS_EXTERNAL
+                                || name == ".data")
                         {
-                            if name == ".data"{
+                            if name == ".data" {
                                 name = file_name.clone() + &name;
                             }
 
@@ -139,20 +139,24 @@ impl Shellcode {
                                     relocats = relocations
                                         .iter()
                                         .filter_map(|v| {
-                                            if let Ok(symbol) = symbols
-                                                .symbol(SymbolIndex(v.symbol_table_index.get(LE) as usize))
-                                            {
+                                            if let Ok(symbol) = symbols.symbol(SymbolIndex(
+                                                v.symbol_table_index.get(LE) as usize,
+                                            )) {
                                                 let mut name = symbol.name_str(symbols.strings());
-                                                if name.starts_with("."){
+                                                if name.starts_with(".") {
                                                     let section_number = symbol.section_number();
-                                                    if let Some((_,symbol)) = symbols.iter().find(|(_,symbol)|{
-                                                            name != symbol.name_str(symbols.strings()) &&
-                                                            section_number == symbol.section_number()
-                                                    }){
-                                                            name = symbol.name_str(symbols.strings());
+                                                    if let Some((_, symbol)) =
+                                                        symbols.iter().find(|(_, symbol)| {
+                                                            name != symbol
+                                                                .name_str(symbols.strings())
+                                                                && section_number
+                                                                    == symbol.section_number()
+                                                        })
+                                                    {
+                                                        name = symbol.name_str(symbols.strings());
                                                     }
                                                 }
-                                                if name == ".data"{
+                                                if name == ".data" {
                                                     name = file_name.clone() + &name;
                                                 }
                                                 let relocation = Relocation {
@@ -208,18 +212,18 @@ impl Shellcode {
         }
         match &symbol.typ {
             SymbolType::Unknown => Err(Error::SymbolTypeErr(name.clone()))?,
-            SymbolType::Symbol(relocations)  => {
-                self.shell_map.insert(name.clone(), (self.code.len(),symbol.data.len()));
+            SymbolType::Symbol(relocations) => {
+                self.shell_map
+                    .insert(name.clone(), (self.code.len(), symbol.data.len()));
                 self.code.extend(&symbol.data);
                 // 8 字节对齐
-                if self.args.align{
+                if self.args.align {
                     let align = 8 - (self.code.len() % 8);
                     if align != 8 {
-                        self.code.extend(vec![0;align]);
+                        self.code.extend(vec![0; align]);
                     }
                 }
                 for relocation in relocations.iter() {
-
                     match self.symbols.get(&relocation.symbol) {
                         None => Err(Error::SymbolNotFound(relocation.symbol.clone()))?,
                         Some(symbol) => self.map((&relocation.symbol, &symbol.clone()))?,
@@ -234,23 +238,23 @@ impl Shellcode {
         match &symbol.typ {
             SymbolType::Unknown => Err(Error::SymbolTypeErr(name.clone()))?,
             SymbolType::Symbol(relocations) => {
-                let &(fun_offset,_size) = self
+                let &(fun_offset, _size) = self
                     .shell_map
                     .get(name)
                     .ok_or(Error::MapNotFound(name.clone()))?;
                 for relocation in relocations.iter() {
-                    let &(symbol_offset,_size) = self
+                    let &(symbol_offset, _size) = self
                         .shell_map
                         .get(&relocation.symbol)
                         .ok_or(Error::MapNotFound(relocation.symbol.clone()))?;
 
                     let offset = fun_offset + relocation.offset as usize;
-                    match self.machine{
-                        Some(pe::IMAGE_FILE_MACHINE_AMD64)=>{
+                    match self.machine {
+                        Some(pe::IMAGE_FILE_MACHINE_AMD64) => {
                             let rel = relocation.typ - 4;
                             match relocation.typ {
-                                pe::IMAGE_REL_AMD64_ADDR64=>{
-                                    let slice = &mut self.code[offset ..offset + 8];
+                                pe::IMAGE_REL_AMD64_ADDR64 => {
+                                    let slice = &mut self.code[offset..offset + 8];
                                     let value = {
                                         let value = i64::from_le_bytes(slice.try_into()?);
                                         if value != -1 || value != 0 {
@@ -274,39 +278,40 @@ impl Shellcode {
                                                 0
                                             }
                                         };
-                                        let rel = (symbol_offset as i32 + value) - (rel as usize + offset + 4) as i32;
+                                        let rel = (symbol_offset as i32 + value)
+                                            - (rel as usize + offset + 4) as i32;
                                         slice.copy_from_slice(&rel.to_le_bytes()[..4]);
                                     }
                                 }
                             }
                         }
-                        Some(pe::IMAGE_FILE_MACHINE_I386)=>{
-
-                            match relocation.typ {
-                                pe::IMAGE_REL_I386_REL32=>{
-                                    let slice = &mut self.code[offset..offset + 4];
-                                    let value = {
-                                        let value = i32::from_le_bytes(slice.try_into()?);
-                                        if value != -1 || value != 0 {
-                                            value
-                                        } else {
-                                            0
-                                        }
-                                    };
-                                    let rel = (symbol_offset as i32 + value) - ( offset + 4) as i32;
-                                    slice.copy_from_slice(&rel.to_le_bytes()[..4]);
-                                }
-                                pe::IMAGE_REL_I386_DIR32=>{
-                                    tracing::info!("{} {} {} {}",name,offset,symbol_offset,relocation.typ);
-
-                                }
-                                _ =>{}
+                        Some(pe::IMAGE_FILE_MACHINE_I386) => match relocation.typ {
+                            pe::IMAGE_REL_I386_REL32 => {
+                                let slice = &mut self.code[offset..offset + 4];
+                                let value = {
+                                    let value = i32::from_le_bytes(slice.try_into()?);
+                                    if value != -1 || value != 0 {
+                                        value
+                                    } else {
+                                        0
+                                    }
+                                };
+                                let rel = (symbol_offset as i32 + value) - (offset + 4) as i32;
+                                slice.copy_from_slice(&rel.to_le_bytes()[..4]);
                             }
-                        }
-                        _=>{}
+                            pe::IMAGE_REL_I386_DIR32 => {
+                                tracing::info!(
+                                    "{} {} {} {}",
+                                    name,
+                                    offset,
+                                    symbol_offset,
+                                    relocation.typ
+                                );
+                            }
+                            _ => {}
+                        },
+                        _ => {}
                     }
-
-
                 }
             }
         }
@@ -331,13 +336,17 @@ impl Shellcode {
             self.map(export)?;
         }
         let kes = self.shell_map.keys().cloned().collect::<Vec<_>>();
-        for export in self.symbols.clone().iter()
-            .filter(|(name,_)|kes.contains(&name)) {
+        for export in self
+            .symbols
+            .clone()
+            .iter()
+            .filter(|(name, _)| kes.contains(&name))
+        {
             self.fix_relocation(export)?;
         }
         Ok(())
     }
-    pub fn gen_cpp(&self, namespace: &str) -> Result<String> {
+    pub fn gen_cpp(&self, namespace: &str) -> String {
         let mut hpp = String::new();
         hpp.push_str("#pragma once\n");
         hpp.push_str("#include <cstdint>\n");
@@ -356,23 +365,32 @@ impl Shellcode {
             });
 
         hpp.push_str("\t};\n");
-        if !self.rel64.is_empty(){
+        if !self.rel64.is_empty() {
             hpp.push_str("\tuint32_t rel[] = {\n");
-            self.rel64.iter().map(|v| format!("0x{:0>8X},", v)).for_each(|v|{
-                hpp.push_str("\t\t");
-                hpp.push_str(&v);
-                hpp.push_str("\n");
-            });
+            self.rel64
+                .iter()
+                .map(|v| format!("0x{:0>8X},", v))
+                .for_each(|v| {
+                    hpp.push_str("\t\t");
+                    hpp.push_str(&v);
+                    hpp.push_str("\n");
+                });
             hpp.push_str("\t};\n");
         }
         hpp.push_str("\tnamespace rva{\n");
         self.shell_map
             .iter()
-            .map(|(name, (rva,size))| {
+            .map(|(name, (rva, size))| {
                 if self.exports.contains(name) {
-                    format!("\tconstexpr uint32_t {} = 0x{:X}; //size {:X}", name, rva, size)
+                    format!(
+                        "\tconstexpr uint32_t {} = 0x{:X}; //size {:X}",
+                        name, rva, size
+                    )
                 } else {
-                    format!("\t//constexpr uint32_t {} = 0x{:X}; //size {:X}", name, rva,size)
+                    format!(
+                        "\t//constexpr uint32_t {} = 0x{:X}; //size {:X}",
+                        name, rva, size
+                    )
                 }
             })
             .for_each(|v| {
@@ -381,25 +399,54 @@ impl Shellcode {
                 hpp.push_str("\n");
             });
         hpp.push_str("\t}\n}\n");
-        Ok(hpp)
+        hpp
     }
+    pub fn gen_rs(&self) -> String {
+        let mut rs = String::new();
+        if !self.rel64.is_empty() {
+            rs.push_str(&format!("const rel[u32;{}] = [\n", self.rel64.len()));
+            self.rel64.iter().for_each(|v| {
+                rs.push_str(&format!("\t0x{:0>8X},\n", v));
+            });
+            rs.push_str("];\n");
+        }
+        rs.push_str("mod rva{\n");
+        self.shell_map.iter().for_each(|(name, (rva, size))| {
+            let s = if self.exports.contains(name) {
+                format!("\tconst {}:u32 = 0x{:X}; //size {:X}\n", name, rva, size)
+            } else {
+                format!("\t//const {}:u32 = 0x{:X}; //size {:X}", name, rva, size)
+            };
+            rs.push_str(&s);
+        });
+        rs.push_str("\t}\n");
 
+        rs
+    }
     pub fn gen(&mut self) -> Result<()> {
         let file = fs::read(&self.args.input)?;
         self.form_binary(&file)?;
         self.parse()?;
-        let shellcode = self.gen_cpp(&self.args.namespace)?;
-        let mut file = fs::File::create(&self.args.output)?;
-
-        file.write_all(shellcode.as_bytes())?;
-
-        if self.args.bin {
-            // 修改output 后缀为 bin
-            let mut output = Path::new(&self.args.output).to_path_buf();
-            output.set_extension("bin");
-            let mut file = fs::File::create(output)?;
-            file.write_all(&self.code)?;
+        let cpp = self.gen_cpp(&self.args.namespace);
+        let rs = self.gen_rs();
+        let mut output =
+            Path::new(self.args.output.as_ref().unwrap_or(&self.args.input)).to_path_buf();
+        {
+            output.set_extension("cpp");
+            let mut file = fs::File::create(&output)?;
+            file.write_all(cpp.as_bytes())?;
         }
+        {
+            output.set_extension("rs");
+            let mut file = fs::File::create(&output)?;
+            file.write_all(rs.as_bytes())?;
+        }
+
+        // 修改output 后缀为 bin
+        output.set_extension("bin");
+        let mut file = fs::File::create(output)?;
+        file.write_all(&self.code)?;
+
         Ok(())
     }
 }

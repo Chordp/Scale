@@ -2,13 +2,15 @@ mod error;
 use crate::args::Args;
 pub use error::{Error, Result};
 use object::coff::{CoffHeader, ImageSymbol};
-use object::pe::ImageFileHeader;
+use object::pe::{ImageFileHeader, IMAGE_SCN_CNT_CODE, IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_CNT_UNINITIALIZED_DATA};
 use object::LittleEndian as LE;
 use object::{pe, read::*};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use lazy_regex::regex;
+
 #[derive(Debug, Clone)]
 pub struct Relocation {
     pub offset: u32,
@@ -18,7 +20,8 @@ pub struct Relocation {
 #[derive(Debug, Clone)]
 pub enum SymbolType {
     Unknown,
-    Symbol(Vec<Relocation>),
+    Text(Vec<Relocation>),
+    Data(Vec<Relocation>),
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +46,8 @@ pub struct Shellcode {
     shell_map: HashMap<String, (usize, usize)>,
     rel64: Vec<u32>,
     code: Vec<u8>,
+    layout: (usize, usize),
+    size: Option<(usize, usize)>,
     machine: Option<u16>,
     args: Args,
 }
@@ -72,18 +77,18 @@ impl Shellcode {
             FileKind::Coff => {
                 let mut offset = 0;
                 let header = ImageFileHeader::parse(binary, &mut offset)?;
-                if None == self.machine {
+                if self.machine.is_none() {
                     self.machine = Some(header.machine());
                 }
                 let sections = header.sections(binary, offset)?;
                 let symbols = header.symbols(binary)?;
                 let mut exports: Vec<_> = vec![];
-                if let Some((_, section)) = sections.section_by_name(symbols.strings(), b".drectve")
-                {
+                //取导出
+                if let Some((_, section)) = sections.section_by_name(symbols.strings(), b".drectve") {
                     if let Ok(data) = section.coff_data(binary) {
                         // EXPORT:([^,\s]+)[,\s]
                         // 正则匹配
-                        let re = regex::Regex::new(r"/EXPORT:([^/\s,]+)").unwrap();
+                        let re = regex!(r"/EXPORT:([^/\s,]+)");
                         exports = re
                             .captures_iter(&String::from_utf8_lossy(data))
                             .filter_map(|cap| cap.get(1))
@@ -118,6 +123,7 @@ impl Shellcode {
                         None
                     })
                     .unwrap_or(rand::random::<u16>().to_string());
+
                 let symbols: HashMap<_, _> = symbols
                     .iter()
                     .filter_map(|(_, symbol)| {
@@ -130,10 +136,21 @@ impl Shellcode {
                             if name == ".data" {
                                 name = file_name.clone() + &name;
                             }
-
                             let session = sections.section(SectionIndex(section_number as usize));
                             if let Ok(session) = session {
                                 let mut result = Symbol::default();
+
+                                let flag =  session.characteristics.get(LE);
+                                result.data = match session.coff_data(binary) {
+                                    Ok(data) => {
+                                        if data.is_empty() {
+                                            vec![0; session.size_of_raw_data.get(LE) as usize]
+                                        } else {
+                                            data.to_vec()
+                                        }
+                                    }
+                                    _ => vec![0; session.size_of_raw_data.get(LE) as usize],
+                                };
                                 let mut relocats = vec![];
                                 if let Ok(relocations) = session.coff_relocations(binary) {
                                     relocats = relocations
@@ -150,7 +167,7 @@ impl Shellcode {
                                                             name != symbol
                                                                 .name_str(symbols.strings())
                                                                 && section_number
-                                                                    == symbol.section_number()
+                                                                == symbol.section_number()
                                                         })
                                                     {
                                                         name = symbol.name_str(symbols.strings());
@@ -170,17 +187,14 @@ impl Shellcode {
                                         })
                                         .collect::<Vec<_>>()
                                 }
-                                result.typ = SymbolType::Symbol(relocats);
-                                result.data = match session.coff_data(binary) {
-                                    Ok(data) => {
-                                        if &data.len() == &0 {
-                                            vec![0; session.size_of_raw_data.get(LE) as usize]
-                                        } else {
-                                            data.to_vec()
-                                        }
-                                    }
-                                    _ => vec![0; session.size_of_raw_data.get(LE) as usize],
-                                };
+                                if flag & IMAGE_SCN_CNT_CODE != 0{
+                                    result.typ = SymbolType::Text(relocats);
+
+                                }else if (flag & IMAGE_SCN_CNT_INITIALIZED_DATA) != 0 ||
+                                    (flag & IMAGE_SCN_CNT_UNINITIALIZED_DATA) != 0{
+                                    result.typ = SymbolType::Data(relocats);
+                                }
+
                                 return Some((name, result));
                             }
                         }
@@ -202,8 +216,10 @@ impl Shellcode {
             shell_map: HashMap::new(),
             rel64: vec![],
             code: vec![],
+            layout: (0, 0),
             machine: None,
             args,
+            size: None,
         }
     }
     fn map(&mut self, (name, symbol): (&String, &Symbol)) -> Result<()> {
@@ -212,17 +228,54 @@ impl Shellcode {
         }
         match &symbol.typ {
             SymbolType::Unknown => Err(Error::SymbolTypeErr(name.clone()))?,
-            SymbolType::Symbol(relocations) => {
-                self.shell_map
-                    .insert(name.clone(), (self.code.len(), symbol.data.len()));
-                self.code.extend(&symbol.data);
-                // 8 字节对齐
-                if self.args.align {
-                    let align = 8 - (self.code.len() % 8);
-                    if align != 8 {
-                        self.code.extend(vec![0; align]);
+            SymbolType::Text(relocations) | SymbolType::Data(relocations) => {
+                //是否为mini
+                match self.size{
+                    Some((code_len,_)) => match &symbol.typ{
+                        SymbolType::Text(_) => {
+                            let code = &mut self.code[self.layout.0..self.layout.0 + symbol.data.len()];
+                            code.copy_from_slice(&symbol.data);
+                            self.layout.0 += symbol.data.len();
+                            self.shell_map
+                                .insert(name.clone(), (self.layout.0, symbol.data.len()));
+                            // 8 字节对齐
+                            if self.args.align {
+                                let align = 8 - (self.layout.0 % 8);
+                                if align != 8 {
+                                    self.layout.0 += align;
+                                }
+                            }
+                        }
+                        SymbolType::Data(_) => {
+                            let code = &mut self.code[code_len + self.layout.1 .. code_len + self.layout.1  + symbol.data.len()];
+                            code.copy_from_slice(&symbol.data);
+                            self.layout.1 += symbol.data.len();
+                            self.shell_map
+                                .insert(name.clone(), (code_len + self.layout.1, symbol.data.len()));
+                            if self.args.align {
+                                let align = 8 - (self.layout.1 % 8);
+                                if align != 8 {
+                                    self.layout.1 += align;
+                                }
+                            }
+                        }
+                        _=>()
+                    }
+                    None => {
+                        self.shell_map
+                            .insert(name.clone(), (self.code.len(), symbol.data.len()));
+                        self.code.extend(&symbol.data);
+                        // 8 字节对齐
+                        if self.args.align {
+                            let align = 8 - (self.code.len() % 8);
+                            if align != 8 {
+                                self.code.extend(vec![0; align]);
+                            }
+                        }
                     }
                 }
+
+                //修复引用
                 for relocation in relocations.iter() {
                     match self.symbols.get(&relocation.symbol) {
                         None => Err(Error::SymbolNotFound(relocation.symbol.clone()))?,
@@ -231,13 +284,12 @@ impl Shellcode {
                 }
             }
         }
-
         Ok(())
     }
     fn fix_relocation(&mut self, (name, symbol): (&String, &Symbol)) -> Result<()> {
         match &symbol.typ {
             SymbolType::Unknown => Err(Error::SymbolTypeErr(name.clone()))?,
-            SymbolType::Symbol(relocations) => {
+            SymbolType::Text(relocations) | SymbolType::Data(relocations) => {
                 let &(fun_offset, _size) = self
                     .shell_map
                     .get(name)
@@ -319,6 +371,46 @@ impl Shellcode {
         Ok(())
     }
     pub fn parse(&mut self) -> Result<()> {
+
+        // 完全体
+        if self.args.mega{
+            let code_len:usize = self
+                .symbols.iter().filter_map(|(_,n)|{
+                if let SymbolType::Text(_) = n.typ  {
+                    let mut res = n.data.len();
+                    if self.args.align {
+                        // 8 字节对齐
+                        let align = 8 - (n.data.len() % 8);
+                        if align != 8 {
+                            res += align
+                        }
+                    }
+                    Some(res)
+                }else {
+                    None
+                }
+            }).sum();
+            let code_len = (code_len + 0x1000 - 1) & !0xFFF;
+            let data_len:usize = self
+                .symbols.iter().filter_map(|(_,n)|{
+                if let SymbolType::Data(_) = n.typ  {
+                    let mut res = n.data.len();
+                    if self.args.align {
+                        // 8 字节对齐
+                        let align = 8 - (n.data.len() % 8);
+                        if align != 8 {
+                            res += align
+                        }
+                    }
+                    Some(res)
+                }else {
+                    None
+                }
+            }).sum();
+            self.size = Some((code_len, data_len));
+            self.code = vec![0; code_len + data_len];
+        }
+
         if let Some(head) = &self.args.head {
             let symbol = self
                 .symbols
@@ -326,6 +418,7 @@ impl Shellcode {
                 .ok_or(Error::SymbolNotFound(head.to_string()))?;
             self.map((&head.to_string(), &symbol.clone()))?;
         }
+
         let exports = self
             .symbols
             .clone()
@@ -340,7 +433,7 @@ impl Shellcode {
             .symbols
             .clone()
             .iter()
-            .filter(|(name, _)| kes.contains(&name))
+            .filter(|(name, _)| kes.contains(name))
         {
             self.fix_relocation(export)?;
         }
@@ -361,10 +454,15 @@ impl Shellcode {
             .for_each(|v| {
                 hpp.push_str("\t\t");
                 hpp.push_str(&v.join(""));
-                hpp.push_str("\n");
+                hpp.push('\n');
             });
 
+
         hpp.push_str("\t};\n");
+        if let Some((code_len, data_len)) = self.size {
+            hpp.push_str(&format!("\tconstexpr size_t code_size = 0x{:08X};\n", code_len));
+            hpp.push_str(&format!("\tconstexpr size_t data_size = 0x{:08X};\n", data_len));
+        }
         if !self.rel64.is_empty() {
             hpp.push_str("\tuint32_t rel[] = {\n");
             self.rel64
@@ -373,7 +471,7 @@ impl Shellcode {
                 .for_each(|v| {
                     hpp.push_str("\t\t");
                     hpp.push_str(&v);
-                    hpp.push_str("\n");
+                    hpp.push('\n');
                 });
             hpp.push_str("\t};\n");
         }
@@ -394,15 +492,19 @@ impl Shellcode {
                 }
             })
             .for_each(|v| {
-                hpp.push_str("\t");
+                hpp.push('\t');
                 hpp.push_str(&v);
-                hpp.push_str("\n");
+                hpp.push('\n');
             });
         hpp.push_str("\t}\n}\n");
         hpp
     }
     pub fn gen_rs(&self) -> String {
         let mut rs = String::new();
+        if let Some((code_len, data_len)) = self.size {
+            rs.push_str(&format!("const CODE_SIZE:usize = 0x{:08X};\n", code_len));
+            rs.push_str(&format!("const DATA_SIZE:usize = 0x{:08X};\n", data_len));
+        }
         if !self.rel64.is_empty() {
             rs.push_str(&format!("const rel[u32;{}] = [\n", self.rel64.len()));
             self.rel64.iter().for_each(|v| {
@@ -413,13 +515,13 @@ impl Shellcode {
         rs.push_str("mod rva{\n");
         self.shell_map.iter().for_each(|(name, (rva, size))| {
             let s = if self.exports.contains(name) {
-                format!("\tconst {}:u32 = 0x{:X}; //size {:X}\n", name, rva, size)
+                format!("\tconst {}:u32 = 0x{:X}; //size {:X}\n", name.to_uppercase(), rva, size)
             } else {
-                format!("\t//const {}:u32 = 0x{:X}; //size {:X}", name, rva, size)
+                format!("\t//const {}:u32 = 0x{:X}; //size {:X}\n", name.to_uppercase(), rva, size)
             };
             rs.push_str(&s);
         });
-        rs.push_str("\t}\n");
+        rs.push_str("}\n");
 
         rs
     }

@@ -12,6 +12,8 @@ pub enum Error {
     IoError(#[from] std::io::Error),
     #[error("切片转换错误: {0}")]
     TryFromSliceError(#[from] std::array::TryFromSliceError),
+    #[error("输出目标并非文件")]
+    NotFile,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

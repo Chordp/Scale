@@ -235,9 +235,9 @@ impl Shellcode {
                         SymbolType::Text(_) => {
                             let code = &mut self.code[self.layout.0..self.layout.0 + symbol.data.len()];
                             code.copy_from_slice(&symbol.data);
-                            self.layout.0 += symbol.data.len();
                             self.shell_map
                                 .insert(name.clone(), (self.layout.0, symbol.data.len()));
+                            self.layout.0 += symbol.data.len();
                             // 8 字节对齐
                             if self.args.align {
                                 let align = 8 - (self.layout.0 % 8);
@@ -249,9 +249,9 @@ impl Shellcode {
                         SymbolType::Data(_) => {
                             let code = &mut self.code[code_len + self.layout.1 .. code_len + self.layout.1  + symbol.data.len()];
                             code.copy_from_slice(&symbol.data);
-                            self.layout.1 += symbol.data.len();
                             self.shell_map
                                 .insert(name.clone(), (code_len + self.layout.1, symbol.data.len()));
+                            self.layout.1 += symbol.data.len();
                             if self.args.align {
                                 let align = 8 - (self.layout.1 % 8);
                                 if align != 8 {
@@ -499,12 +499,13 @@ impl Shellcode {
         hpp.push_str("\t}\n}\n");
         hpp
     }
-    pub fn gen_rs(&self) -> String {
+    pub fn gen_rs(&self,out:String) -> String {
         let mut rs = String::new();
         if let Some((code_len, data_len)) = self.size {
             rs.push_str(&format!("const CODE_SIZE:usize = 0x{:08X};\n", code_len));
             rs.push_str(&format!("const DATA_SIZE:usize = 0x{:08X};\n", data_len));
         }
+        rs.push_str(&format!("const PAYLOAD:&[u8] = include_bytes!(\"{out}\");\n"));
         if !self.rel64.is_empty() {
             rs.push_str(&format!("const rel[u32;{}] = [\n", self.rel64.len()));
             self.rel64.iter().for_each(|v| {
@@ -529,10 +530,16 @@ impl Shellcode {
         let file = fs::read(&self.args.input)?;
         self.form_binary(&file)?;
         self.parse()?;
-        let cpp = self.gen_cpp(&self.args.namespace);
-        let rs = self.gen_rs();
+
         let mut output =
             Path::new(self.args.output.as_ref().unwrap_or(&self.args.input)).to_path_buf();
+        {
+            output.set_extension("bin");
+            let mut file = fs::File::create(&output)?;
+            file.write_all(&self.code)?;
+        }
+        let cpp = self.gen_cpp(&self.args.namespace);
+        let rs = self.gen_rs(output.file_name().ok_or(Error::NotFile)?.display().to_string());
         {
             output.set_extension("cpp");
             let mut file = fs::File::create(&output)?;
@@ -543,11 +550,6 @@ impl Shellcode {
             let mut file = fs::File::create(&output)?;
             file.write_all(rs.as_bytes())?;
         }
-
-        // 修改output 后缀为 bin
-        output.set_extension("bin");
-        let mut file = fs::File::create(output)?;
-        file.write_all(&self.code)?;
 
         Ok(())
     }

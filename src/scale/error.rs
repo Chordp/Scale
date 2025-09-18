@@ -5,7 +5,7 @@ pub enum Error {
     #[error("符号表未找到: {0}")]
     SymbolNotFound(String),
     #[error("符号表类型错误: {0}")]
-    SymbolTypeErr(String),
+    SymbolType(String),
     #[error("映射表未找到: {0}")]
     MapNotFound(String),
     #[error("Io错误: {0}")]

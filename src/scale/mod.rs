@@ -14,7 +14,6 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
-use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct Relocation {

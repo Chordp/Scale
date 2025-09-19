@@ -409,17 +409,17 @@ impl Shellcode {
             }
             if let Some(sym) = self.symbols.get(&name) {
                 symbols.insert(name.clone(), sym.clone());
-
                 // 仅 Text/Data 类型会产生依赖
-                if let SymbolType::Text(rels) | SymbolType::Data(rels) = &sym.typ {
-                    for r in rels {
-                        // 依赖的目标符号名
-                        let dep = &r.symbol;
-                        if !visited.contains(dep) {
-                            stack.push(dep.clone());
-                        }
+                for relocation in match &sym.typ {
+                    SymbolType::Text(rels) | SymbolType::Data(rels) => rels,
+                    _ => continue,
+                } {
+                    let dep = &relocation.symbol;
+                    if !visited.contains(dep) {
+                        stack.push(dep.clone());
                     }
                 }
+
             }
         }
 

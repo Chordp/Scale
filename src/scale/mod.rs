@@ -1,4 +1,6 @@
+
 mod error;
+
 use crate::args::Args;
 pub use error::{Error, Result};
 use lazy_regex::regex;
@@ -446,6 +448,7 @@ impl Shellcode {
             }
         }
         let code_len = (code_len + 0x1000 - 1) & !0xFFF;
+        let data_len = (data_len + 0x1000 - 1) & !0xFFF;
         (code_len,data_len)
 
     }
@@ -459,7 +462,6 @@ impl Shellcode {
         // 完全体
         if self.args.mega {
             let (code_len, data_len) = self.get_layout(&exports);
-            println!("code_len: {}, data_len: {}", code_len, data_len);
             self.size = Some((code_len, data_len));
             self.code = vec![0; code_len + data_len];
         }
@@ -554,7 +556,7 @@ impl Shellcode {
         hpp
     }
     pub fn gen_rs(&self, out: String) -> String {
-        let mut rs = String::new();
+        let mut rs = "#![allow(dead_code)]\n".to_string();
         if let Some((code_len, data_len)) = self.size {
             rs.push_str(&format!("pub const CODE_SIZE:usize = 0x{:08X};\n", code_len));
             rs.push_str(&format!("pub const DATA_SIZE:usize = 0x{:08X};\n", data_len));

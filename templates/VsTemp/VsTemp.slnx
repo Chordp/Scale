@@ -1,0 +1,10 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="VsTemp/VsTemp.vcxproj" Id="74cb8ffe-3fca-4151-b1ea-d3d3e39e5b4c">
+    <BuildType Solution="Debug|x64" Project="Release" />
+    <Build Solution="Debug|x86" Project="false" />
+  </Project>
+</Solution>

@@ -72,18 +72,6 @@ let output = shellcode.make(&binary_data)?;
 - `gen_cpp()` / `gen_rs()` - 代码生成
 - `write_output()` - 输出 .bin/.hpp/.rs 文件
 
-## 示例
-
-```bash
-# 在 "x64 Native Tools Command Prompt for VS" 中运行
-cargo run --example demo
-```
-
-示例流程：
-1. 调用 MSVC 编译 `examples/shellcode.c`
-2. 使用 scale 生成 shellcode
-3. 分配可执行内存并执行
-
 ## 输出格式
 
 - `.bin` - 原始 shellcode

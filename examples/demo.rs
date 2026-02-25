@@ -4,17 +4,16 @@
 //! 1. 打开 "x64 Native Tools Command Prompt for VS"
 //! 2. cargo run --example demo
 
+use color_eyre::eyre::eyre;
 use scale::{Config, Shellcode};
 use std::process::Command;
 use std::{env, fs, mem, ptr};
-use color_eyre::eyre::eyre;
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR")?;
     let lib_file = format!("{}/templates/VsTemp/x64/Release/VsTemp.lib", manifest_dir);
-
 
     // 2. 使用 scale 生成 shellcode
     println!("[*] 生成 shellcode ...");
@@ -51,7 +50,11 @@ fn main() -> color_eyre::Result<()> {
         }
 
         // 复制 shellcode
-        ptr::copy_nonoverlapping(output.payload.as_ptr(), mem as *mut u8, output.payload.len());
+        ptr::copy_nonoverlapping(
+            output.payload.as_ptr(),
+            mem as *mut u8,
+            output.payload.len(),
+        );
 
         // 找到 entry 函数的 RVA
         let entry_rva = output

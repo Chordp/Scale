@@ -120,7 +120,7 @@ impl SymbolExt for pe::ImageSymbol {
             Ok(name) => String::from_utf8_lossy(name),
             Err(_) => String::from_utf8_lossy(&self.name),
         }
-            .to_string()
+        .to_string()
     }
 }
 
@@ -219,6 +219,43 @@ impl Shellcode {
                     })
                     .unwrap_or(rand::random::<u16>().to_string());
 
+                // 预计算符号边界 - 正确处理同一 section 中的多个符号
+                let mut section_values: HashMap<usize, Vec<u32>> = HashMap::new();
+                for (_, sym) in symbols.iter() {
+                    let sec_num = sym.section_number();
+                    let class = sym.storage_class();
+                    let sym_name = sym.name_str(symbols.strings());
+                    if sec_num != 0
+                        && (class == pe::IMAGE_SYM_CLASS_EXTERNAL
+                            || class == pe::IMAGE_SYM_CLASS_STATIC
+                            || sym_name == ".data")
+                    {
+                        section_values
+                            .entry(sec_num as usize)
+                            .or_default()
+                            .push(sym.value.get(LE));
+                    }
+                }
+                let section_boundaries: HashMap<usize, Vec<(u32, u32)>> = section_values
+                    .into_iter()
+                    .filter_map(|(sec_num, mut values)| {
+                        values.sort();
+                        values.dedup();
+                        sections.section(SectionIndex(sec_num)).ok().map(|section| {
+                            let section_size = section.size_of_raw_data.get(LE);
+                            let bounds = values
+                                .iter()
+                                .enumerate()
+                                .map(|(i, &val)| {
+                                    let end = values.get(i + 1).copied().unwrap_or(section_size);
+                                    (val, end)
+                                })
+                                .collect();
+                            (sec_num, bounds)
+                        })
+                    })
+                    .collect();
+
                 let symbols: HashMap<_, _> = symbols
                     .iter()
                     .filter_map(|(_, symbol)| {
@@ -227,8 +264,8 @@ impl Shellcode {
                         let class = symbol.storage_class();
                         if section_number != 0
                             && (class == pe::IMAGE_SYM_CLASS_EXTERNAL
-                            || class == pe::IMAGE_SYM_CLASS_STATIC
-                            || name == ".data")
+                                || class == pe::IMAGE_SYM_CLASS_STATIC
+                                || name == ".data")
                         {
                             if name == ".data" {
                                 name = file_name.clone() + &name;
@@ -240,21 +277,39 @@ impl Shellcode {
                                 Ok(session) => {
                                     let mut result = Symbol::default();
 
+                                    // 计算符号在 section 中的实际范围
+                                    let sym_value = symbol.value.get(LE);
+                                    let (data_start, data_end) = section_boundaries
+                                        .get(&(section_number as usize))
+                                        .and_then(|bounds| {
+                                            bounds.iter().find(|(s, _)| *s == sym_value)
+                                        })
+                                        .copied()
+                                        .unwrap_or((0, session.size_of_raw_data.get(LE)));
+                                    let data_start = data_start as usize;
+                                    let data_end = data_end as usize;
+
                                     let flag = session.characteristics.get(LE);
                                     result.data = match session.coff_data(binary) {
                                         Ok(data) => {
                                             if data.is_empty() {
-                                                vec![0; session.size_of_raw_data.get(LE) as usize]
+                                                vec![0; data_end - data_start]
+                                            } else if data_start < data.len() {
+                                                data[data_start..data_end.min(data.len())].to_vec()
                                             } else {
-                                                data.to_vec()
+                                                vec![0; data_end - data_start]
                                             }
                                         }
-                                        _ => vec![0; session.size_of_raw_data.get(LE) as usize],
+                                        _ => vec![0; data_end - data_start],
                                     };
                                     let mut relocats = vec![];
                                     if let Ok(relocations) = session.coff_relocations(binary) {
                                         relocats = relocations
                                             .iter()
+                                            .filter(|v| {
+                                                let addr = v.virtual_address.get(LE) as usize;
+                                                addr >= data_start && addr < data_end
+                                            })
                                             .filter_map(|v| {
                                                 if let Ok(symbol) = symbols.symbol(SymbolIndex(
                                                     v.symbol_table_index.get(LE) as usize,
@@ -269,7 +324,7 @@ impl Shellcode {
                                                                 name != symbol
                                                                     .name_str(symbols.strings())
                                                                     && section_number
-                                                                    == symbol.section_number()
+                                                                        == symbol.section_number()
                                                             })
                                                         {
                                                             name =
@@ -280,7 +335,8 @@ impl Shellcode {
                                                         name = file_name.clone() + &name;
                                                     }
                                                     let relocation = Relocation {
-                                                        offset: v.virtual_address.get(LE),
+                                                        offset: v.virtual_address.get(LE)
+                                                            - data_start as u32,
                                                         typ: v.typ.get(LE),
                                                         symbol: name,
                                                     };
@@ -540,8 +596,6 @@ impl Shellcode {
             .filter(|(name, _)| self.exports.contains(name))
             .collect::<HashMap<_, _>>();
 
-        println!("{:#?}", self
-            .symbols);
         // 完全体
         if self.config.mega {
             let (code_len, data_len) = self.get_layout(&exports);

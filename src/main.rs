@@ -1,9 +1,9 @@
 use clap::Parser;
+use color_eyre::eyre::eyre;
 use scale::{Config, Shellcode, ShellcodeOutput};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use color_eyre::eyre::eyre;
 use tracing_subscriber::fmt::time::LocalTime;
 
 #[derive(Parser, Debug)]
@@ -15,7 +15,12 @@ struct Args {
     input: String,
     #[arg(short, long, help = "输出文件路径")]
     output: Option<String>,
-    #[arg(short, long, default_value = "false", help = "完全体shellcode data和code分离")]
+    #[arg(
+        short,
+        long,
+        default_value = "false",
+        help = "完全体shellcode data和code分离"
+    )]
     mega: bool,
     #[arg(short, long, default_value = "shellcode", help = "cpp的namespace名称")]
     namespace: String,
@@ -26,7 +31,9 @@ struct Args {
 #[cfg(target_os = "windows")]
 fn enable_ansi_support() -> color_eyre::Result<()> {
     use windows::core::w;
-    use windows::Win32::Foundation::{GetLastError, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows::Win32::Foundation::{
+        GetLastError, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
+    };
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_WRITE, OPEN_EXISTING,
     };

@@ -26,6 +26,8 @@ struct Args {
     namespace: String,
     #[arg(short, long, default_value = "false", help = "是否对shellcode进行对齐")]
     align: bool,
+    #[arg(short, long, help = "额外导出符号（可多次指定）")]
+    export: Vec<String>,
 }
 
 #[cfg(target_os = "windows")]
@@ -86,7 +88,10 @@ fn main() -> color_eyre::Result<()> {
     }
 
     // 将 CLI 参数转换为 Config
-    let config = Config::new().with_mega(args.mega).with_align(args.align);
+    let config = Config::new()
+        .with_mega(args.mega)
+        .with_align(args.align)
+        .with_exports(args.export);
     let config = match &args.head {
         Some(head) => config.with_head(head),
         None => config,

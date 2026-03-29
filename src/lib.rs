@@ -21,6 +21,8 @@ pub struct Config {
     pub mega: bool,
     /// 是否对 shellcode 进行 8 字节对齐
     pub align: bool,
+    /// 额外导出符号列表（命令行指定）
+    pub extra_exports: Vec<String>,
 }
 
 impl Config {
@@ -29,6 +31,7 @@ impl Config {
             head: None,
             mega: false,
             align: false,
+            extra_exports: vec![],
         }
     }
 
@@ -44,6 +47,11 @@ impl Config {
 
     pub fn with_align(mut self, align: bool) -> Self {
         self.align = align;
+        self
+    }
+
+    pub fn with_exports(mut self, exports: Vec<String>) -> Self {
+        self.extra_exports = exports;
         self
     }
 }
@@ -140,6 +148,8 @@ impl Shellcode {
     }
     /// 处理二进制数据，生成 shellcode
     pub fn make(&mut self, binary: &[u8]) -> Result<ShellcodeOutput> {
+        // 先合入命令行指定的额外导出符号
+        self.exports.extend(self.config.extra_exports.clone());
         self.form_binary(binary)?;
         self.parse()?;
 
@@ -205,6 +215,8 @@ impl Shellcode {
                     })
                     .collect::<Vec<_>>();
                 self.exports.extend(exports);
+                // 合入命令行指定的额外导出符号
+                self.exports.extend(self.config.extra_exports.clone());
 
                 let file_name = symbols
                     .iter()
@@ -383,7 +395,7 @@ impl Shellcode {
             return Ok(());
         }
         match &symbol.typ {
-            SymbolType::Unknown => Err(Error::SymbolType(name.to_owned()))?,
+            SymbolType::Unknown => return Ok(()),
             SymbolType::Text(relocations) | SymbolType::Data(relocations) => {
                 //是否为mini
                 match self.size {
@@ -449,7 +461,7 @@ impl Shellcode {
 
     fn fix_relocation(&mut self, name: &str, symbol: &Symbol) -> Result<()> {
         match &symbol.typ {
-            SymbolType::Unknown => Err(Error::SymbolType(name.to_owned()))?,
+            SymbolType::Unknown => return Ok(()),
             SymbolType::Text(relocations) | SymbolType::Data(relocations) => {
                 let &(fun_offset, _size) = self
                     .shell_map
